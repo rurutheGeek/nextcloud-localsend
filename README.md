@@ -128,6 +128,10 @@ same page. No `occ config:app:set` needed.
   if it must cross a network boundary, and keep the token secret.
 - Any client that knows the token can list devices and send files; the app adds
   Nextcloud's own permission checks (a user can only send files they can read).
+- `POST /api/localsend/v2/register` is unauthenticated because the LocalSend
+  protocol uses it for discovery. A host on the LAN could therefore announce
+  itself as another device; peers are identified by fingerprint and the
+  receiving device still shows a confirmation before accepting a file.
 
 ## Development
 

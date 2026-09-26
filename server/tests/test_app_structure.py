@@ -77,6 +77,15 @@ class AppTests(unittest.TestCase):
         self.assertIn('exec: async ({ nodes })', source)
         self.assertIn('FileType.File', source)
 
+    def test_the_relay_calls_handle_local_addresses_and_stream_sizes(self):
+        controller = read('lib/Controller/SendController.php')
+        # 既定のNextcloudはLAN内アドレスへのHTTPを拒否する。devicesにも指定が要る。
+        self.assertEqual(controller.count("'allow_local_address' => true"), 2)
+        # サイズ不明のストリームはchunkedになり、中継の上限検査をすり抜ける。
+        self.assertIn("'Content-Length' => (string)$node->getSize()", controller)
+        self.assertIn("'http_errors' => false", controller)
+        self.assertIn("$payload['error']", controller)
+
 
 class BundleTests(unittest.TestCase):
     def test_the_bundle_registers_the_send_action(self):

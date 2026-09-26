@@ -46,12 +46,20 @@ class SendController extends Controller {
 			$response = $this->client()->get($this->baseUrl() . '/devices', [
 				'headers' => $this->authHeaders(),
 				'timeout' => 30,
+				'http_errors' => false,
+				'nextcloud' => ['allow_local_address' => true],
 			]);
 			$payload = json_decode((string)$response->getBody(), true);
 		} catch (\Throwable $error) {
 			$this->logger->error('localsend_share: device lookup failed', ['exception' => $error]);
 			return new DataResponse(
 				['error' => $this->l->t('Could not load the device list (the relay is unreachable)')],
+				Http::STATUS_BAD_GATEWAY
+			);
+		}
+		if ($response->getStatusCode() !== 200) {
+			return new DataResponse(
+				['error' => $this->relayError($payload, 'Could not load the device list')],
 				Http::STATUS_BAD_GATEWAY
 			);
 		}
@@ -93,12 +101,14 @@ class SendController extends Controller {
 			$response = $this->client()->post($this->baseUrl() . '/send', [
 				'headers' => $this->authHeaders() + [
 					'Content-Type' => 'application/octet-stream',
+					'Content-Length' => (string)$node->getSize(),
 					'X-Send-To' => $fingerprint,
 					'X-Send-Filename' => rawurlencode($node->getName()),
 					'X-Send-User' => rawurlencode($displayName),
 				],
 				'body' => $handle,
 				'timeout' => 300,
+				'http_errors' => false,
 				'nextcloud' => ['allow_local_address' => true],
 			]);
 		} catch (\Throwable $error) {
@@ -114,6 +124,12 @@ class SendController extends Controller {
 		}
 
 		$result = json_decode((string)$response->getBody(), true);
+		if ($response->getStatusCode() !== 200) {
+			return new DataResponse(
+				['error' => $this->relayError($result, 'Could not confirm the transfer')],
+				Http::STATUS_BAD_GATEWAY
+			);
+		}
 		if (!is_array($result) || !isset($result['status'])) {
 			return new DataResponse(
 				['error' => $this->l->t('Could not confirm the transfer')],
@@ -121,6 +137,13 @@ class SendController extends Controller {
 			);
 		}
 		return new DataResponse($result);
+	}
+
+	private function relayError(mixed $payload, string $fallback): string {
+		if (is_array($payload) && isset($payload['error']) && is_string($payload['error'])) {
+			return $payload['error'];
+		}
+		return $this->l->t($fallback);
 	}
 
 	private function configured(): bool {

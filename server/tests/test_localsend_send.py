@@ -9,6 +9,7 @@ import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import threading
+import types
 import unittest
 
 SOURCE = Path(__file__).resolve().parents[1] / 'localsend_send.py'
@@ -198,6 +199,17 @@ class ScanDiscoveryTests(unittest.TestCase):
         self.assertEqual(body['port'], 53200)
         self.assertEqual(body['fingerprint'], 'FP')
         self.assertFalse(body['download'])
+
+
+class AuthorizationTests(unittest.TestCase):
+    def test_only_the_shared_token_is_accepted(self):
+        stub = types.SimpleNamespace(headers={'Authorization': 'Bearer s3cret'},
+                                     server=types.SimpleNamespace(token='s3cret'))
+        self.assertTrue(sender.SendHandler._authorized(stub))
+        stub.headers = {'Authorization': 'Bearer wrong'}
+        self.assertFalse(sender.SendHandler._authorized(stub))
+        stub.headers = {}
+        self.assertFalse(sender.SendHandler._authorized(stub))
 
 
 class ConfigurationTests(unittest.TestCase):

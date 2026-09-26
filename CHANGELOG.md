@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - 2026-09-26
+
+### Fixed
+
+- The device list request now allows local addresses like the send request, so
+  the action works on instances without `allow_local_remote_servers`.
+- Send the file size explicitly (`Content-Length`), so files on storages that
+  cannot report a seekable stream size still send reliably.
+- Show the relay's error message instead of a generic one.
+- Compare the relay token with `hmac.compare_digest` like the print relay.
+
+### Documentation
+
+- Note that `POST /api/localsend/v2/register` is unauthenticated by protocol
+  design and that the relay belongs on a trusted LAN.
+
 ## [1.0.1] - 2026-09-26
 
 ### Added
