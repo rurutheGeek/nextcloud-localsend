@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: Nextcloud app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: The committed bundle must match the source
+        run: git diff --exit-code js/
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+      - name: PHP syntax check
+        run: |
+          find appinfo lib templates -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: XML schema sanity (well-formed)
+        run: python3 -c "import xml.etree.ElementTree as ET; ET.parse('appinfo/info.xml')"
+
+  server:
+    name: LocalSend relay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Unit tests
+        run: python3 -m unittest discover -s server/tests -v
+      - name: Build the container
+        run: docker build -t localsend-relay:ci server/

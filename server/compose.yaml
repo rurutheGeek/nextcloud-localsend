@@ -1,0 +1,10 @@
+# The relay discovers devices with UDP multicast (224.0.0.167:53317) and
+# broadcast, so it must run on the same L2 network as the LocalSend devices.
+# Host networking is the simplest way to get that with Docker.
+services:
+  localsend-relay:
+    build: .
+    image: ghcr.io/ruruthegeek/localsend-relay:latest
+    env_file: .env
+    network_mode: host
+    restart: unless-stopped

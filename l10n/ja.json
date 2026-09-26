@@ -1,0 +1,32 @@
+{
+	"translations": {
+		"Choose a device": "送り先の端末を選ぶ",
+		"Cancel": "キャンセル",
+		"Send via LocalSend": "LocalSendで送る",
+		"Could not load the device list": "端末一覧を取得できません",
+		"No device found. Open LocalSend on the receiving device.": "端末が見つかりません。送り先でLocalSendを開いてください",
+		"Sent to {device}": "送信しました（{device}）",
+		"Sending failed": "送信に失敗しました",
+		"The LocalSend relay is not configured yet": "LocalSend中継APIがまだ設定されていません",
+		"Could not load the device list (the relay is unreachable)": "端末一覧を取得できません（中継APIに接続できません）",
+		"Could not read the device list": "端末一覧を読めません",
+		"Authentication required": "認証が必要です",
+		"File not found": "ファイルが見つかりません",
+		"You are not allowed to read this file": "このファイルを読む権限がありません",
+		"Could not open the file": "ファイルを開けません",
+		"Sending failed (open LocalSend on the device and try again)": "送信に失敗しました（端末のLocalSendを開いて再試行してください）",
+		"Could not confirm the transfer": "送信結果を確認できません",
+		"LocalSend Share": "LocalSendで送る",
+		"URL of the LocalSend relay reachable from this Nextcloud server, e.g. http://192.168.1.10:53200. The relay must run on the same LAN as the receiving devices; its setup is documented in the server/ directory of the app repository.": "このNextcloudサーバーから到達できるLocalSend中継APIのURL（例: http://192.168.1.10:53200）。中継APIは送り先の端末と同じLANで動かす必要があります。設定方法はアプリのリポジトリの server/ にあります。",
+		"Saved. The relay answered the health check.": "保存しました。中継APIがヘルスチェックに応答しました。",
+		"Saved, but the relay did not answer the health check. Check the URL, the token and the network.": "保存しましたが、中継APIがヘルスチェックに応答しません。URL・トークン・ネットワークを確認してください。",
+		"Saved. Set both the relay URL and the token to enable sending.": "保存しました。送信を有効にするには中継APIのURLとトークンの両方を設定してください。",
+		"Relay URL": "中継APIのURL",
+		"Relay token": "中継APIのトークン",
+		"stored — leave empty to keep": "保存済み（空欄なら維持）",
+		"shared secret": "共有トークン",
+		"Remove the stored token": "保存済みのトークンを削除する",
+		"Save": "保存"
+	},
+	"pluralForm": "nplurals=1; plural=0;"
+}

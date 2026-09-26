@@ -1,0 +1,10 @@
+# Everything the app archive does not need. The archive must contain only the
+# app itself; the relay service and CI files live in this repository too.
+/node_modules
+/build
+/server
+/.github
+/krankerl.toml
+/.gitignore
+/.nextcloudignore
+/.editorconfig
