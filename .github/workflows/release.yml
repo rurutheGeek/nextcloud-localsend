@@ -1,14 +1,14 @@
 name: Release
 
-# Builds the signed app archive for a published GitHub release and, once the
-# app is registered in the Nextcloud App Store, uploads the release there.
+# Builds the app archive for a published GitHub release.
 #
-# Required repository secrets:
-#   APP_PRIVATE_KEY  the app's private key (~/.nextcloud/certificates/localsend_share.key)
-#   APP_PUBLIC_CRT   the signed public certificate (localsend_share.crt)
-#   APPSTORE_TOKEN   https://apps.nextcloud.com/account/token
-# Required repository variable:
-#   APPSTORE_ENABLED=true  only then is the release pushed to the App Store
+# Without signing set up (the default) the workflow attaches an unsigned
+# archive, which is enough for manual installs. Once the certificate has been
+# registered in the Nextcloud App Store:
+#   - set the repository secrets APP_PRIVATE_KEY and APP_PUBLIC_CRT
+#   - set the repository variable SIGNING_ENABLED=true (krankerl signs the archive)
+#   - set the repository secrets APPSTORE_TOKEN and the variable
+#     APPSTORE_ENABLED=true to push the release to the App Store
 #
 # The certificate is obtained once via a pull request to
 # https://github.com/nextcloud/app-certificate-requests (see README).
@@ -20,6 +20,9 @@ on:
 
 permissions:
   contents: write
+
+env:
+  APP_ID: localsend_share
 
 jobs:
   package:
@@ -42,17 +45,34 @@ jobs:
             exit 1
           fi
 
-      - name: Install krankerl
-        run: cargo install --git https://github.com/ChristophWurst/krankerl --locked
+      - name: Build the app bundle
+        run: npm ci && npm run build
 
-      - name: Package and sign the app
+      - name: Build the release archive
+        run: |
+          mkdir -p build/artifacts
+          tar \
+            --exclude='./node_modules' \
+            --exclude='./server' \
+            --exclude='./.github' \
+            --exclude='./krankerl.toml' \
+            --exclude='./.gitignore' \
+            --exclude='./.nextcloudignore' \
+            --exclude='./.git' \
+            --transform "s,^\.,${APP_ID}," \
+            -czf "build/artifacts/${APP_ID}.tar.gz" .
+          tar tzf "build/artifacts/${APP_ID}.tar.gz" | head -1
+
+      - name: Sign the archive
+        if: vars.SIGNING_ENABLED == 'true'
         env:
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
           APP_PUBLIC_CRT: ${{ secrets.APP_PUBLIC_CRT }}
         run: |
+          cargo install --git https://github.com/ChristophWurst/krankerl --locked
           mkdir -p ~/.nextcloud/certificates
-          printf '%s' "$APP_PRIVATE_KEY" > ~/.nextcloud/certificates/localsend_share.key
-          printf '%s' "$APP_PUBLIC_CRT" > ~/.nextcloud/certificates/localsend_share.crt
+          printf '%s' "$APP_PRIVATE_KEY" > ~/.nextcloud/certificates/$APP_ID.key
+          printf '%s' "$APP_PUBLIC_CRT" > ~/.nextcloud/certificates/$APP_ID.crt
           krankerl package
           krankerl sign --package
           rm -f ~/.nextcloud/certificates/*

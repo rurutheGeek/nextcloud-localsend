@@ -163,17 +163,20 @@ The store requires an app-specific certificate and a signed archive.
    [nextcloud/app-certificate-requests](https://github.com/nextcloud/app-certificate-requests)
    and put the signed `localsend_share.crt` next to the key.
 
-3. Add the repository secrets `APP_PRIVATE_KEY`, `APP_PUBLIC_CRT` and
-   `APPSTORE_TOKEN` (from <https://apps.nextcloud.com/account/token>), and set
-   the repository variable `APPSTORE_ENABLED=true`.
+3. Add the repository secrets `APP_PRIVATE_KEY` and `APP_PUBLIC_CRT`, and
+   set the repository variable `SIGNING_ENABLED=true`. For the App Store push,
+   also add `APPSTORE_TOKEN` (from <https://apps.nextcloud.com/account/token>)
+   and set the variable `APPSTORE_ENABLED=true`.
 
 4. Bump the version in `appinfo/info.xml` (and `CHANGELOG.md`), create a GitHub
    release tagged `v<version>` and publish it. The
    [release workflow](.github/workflows/release.yml) builds, signs and attaches
    `localsend_share.tar.gz`, then pushes it to the store.
 
-Until `APPSTORE_ENABLED` is set, the workflow only attaches the archive to the
-GitHub release.
+Until `SIGNING_ENABLED` is set, the workflow attaches an unsigned archive to
+the GitHub release (enough for manual installs). Certification is pending for
+both apps; the certificate requests are at
+[nextcloud/app-certificate-requests](https://github.com/nextcloud/app-certificate-requests).
 
 ## License
 
