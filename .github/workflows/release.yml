@@ -1,14 +1,15 @@
 name: Release
 
-# Builds the app archive for a published GitHub release.
+# Builds the app archive for a published GitHub release and attaches it.
 #
-# Without signing set up (the default) the workflow attaches an unsigned
-# archive, which is enough for manual installs. Once the certificate has been
-# registered in the Nextcloud App Store:
-#   - set the repository secrets APP_PRIVATE_KEY and APP_PUBLIC_CRT
-#   - set the repository variable SIGNING_ENABLED=true (krankerl signs the archive)
-#   - set the repository secrets APPSTORE_TOKEN and the variable
-#     APPSTORE_ENABLED=true to push the release to the App Store
+# Publishing to the Nextcloud App Store is a separate job that runs only when
+# the repository variable APPSTORE_ENABLED is true. That job uses the
+# `appstore` environment: add required reviewers in the repository settings
+# (Settings -> Environments -> appstore) and every store release waits for an
+# approval before anything is uploaded. Pre-releases are published as nightly.
+#
+# Repository secrets: APP_PRIVATE_KEY, APP_PUBLIC_CRT, APPSTORE_TOKEN
+# Repository variable: APPSTORE_ENABLED=true (after the app is registered)
 #
 # The certificate is obtained once via a pull request to
 # https://github.com/nextcloud/app-certificate-requests (see README).
@@ -23,12 +24,18 @@ permissions:
 
 env:
   APP_ID: localsend_share
+  KRANKERL_VERSION: '0.14.0'
+  KRANKERL_SHA256: f4a24300458cdc9d73811ccc1d7ec19aef78788c2bb21d8ecfd51913e42a4d99
 
 jobs:
   package:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
 
       - uses: actions/setup-node@v4
         with:
@@ -63,40 +70,54 @@ jobs:
             -czf "build/artifacts/${APP_ID}.tar.gz" .
           tar tzf "build/artifacts/${APP_ID}.tar.gz" | head -1
 
-      - name: Sign the archive
-        if: vars.SIGNING_ENABLED == 'true'
-        env:
-          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
-          APP_PUBLIC_CRT: ${{ secrets.APP_PUBLIC_CRT }}
-        run: |
-          cargo install --git https://github.com/ChristophWurst/krankerl --locked
-          mkdir -p ~/.nextcloud/certificates
-          printf '%s' "$APP_PRIVATE_KEY" > ~/.nextcloud/certificates/$APP_ID.key
-          printf '%s' "$APP_PUBLIC_CRT" > ~/.nextcloud/certificates/$APP_ID.crt
-          krankerl package
-          krankerl sign --package
-          rm -f ~/.nextcloud/certificates/*
-
       - name: Attach the archive to the GitHub release
         if: github.event_name == 'release'
         uses: svenstaro/upload-release-action@v2
-        id: attach
         with:
           file: build/artifacts/localsend_share.tar.gz
           asset_name: localsend_share.tar.gz
           tag: ${{ github.ref }}
           overwrite: true
 
-      - name: Publish to the Nextcloud App Store
-        if: github.event_name == 'release' && vars.APPSTORE_ENABLED == 'true'
-        env:
-          APPSTORE_TOKEN: ${{ secrets.APPSTORE_TOKEN }}
-        run: |
-          krankerl login --appstore "$APPSTORE_TOKEN"
-          krankerl publish "${{ steps.attach.outputs.browser_download_url }}"
-
       - name: Keep the archive as a workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: localsend_share.tar.gz
           path: build/artifacts/localsend_share.tar.gz
+
+  publish:
+    needs: package
+    if: github.event_name == 'release' && vars.APPSTORE_ENABLED == 'true'
+    # Waits for the reviewers configured on this environment.
+    environment: appstore
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: localsend_share.tar.gz
+          path: build/artifacts
+
+      - name: Install krankerl
+        run: |
+          curl -fsSL -o krankerl \
+            "https://github.com/ChristophWurst/krankerl/releases/download/v${KRANKERL_VERSION}/krankerl"
+          echo "${KRANKERL_SHA256}  krankerl" | sha256sum -c -
+          chmod +x krankerl
+          sudo mv krankerl /usr/local/bin/krankerl
+
+      - name: Publish to the Nextcloud App Store
+        env:
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+          APPSTORE_TOKEN: ${{ secrets.APPSTORE_TOKEN }}
+        run: |
+          mkdir -p ~/.nextcloud/certificates
+          printf '%s' "$APP_PRIVATE_KEY" > ~/.nextcloud/certificates/$APP_ID.key
+          nightly=""
+          if [ "${{ github.event.release.prerelease }}" = "true" ]; then
+            nightly="--nightly"
+          fi
+          krankerl login --appstore "$APPSTORE_TOKEN"
+          krankerl publish $nightly \
+            "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/${APP_ID}.tar.gz"
