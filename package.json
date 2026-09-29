@@ -1,11 +1,11 @@
 {
 	"name": "localsend_share",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"private": true,
 	"description": "Nextcloud file action that sends files to LAN LocalSend devices",
 	"license": "AGPL-3.0-or-later",
 	"scripts": {
-		"build": "esbuild src/localsend.js --bundle --format=iife --target=es2020 --alias:path=./src/shims/path.js --alias:string_decoder=./src/shims/string_decoder.js --outfile=js/localsend.js"
+		"build": "node tools/l10n.mjs && esbuild src/localsend.js --bundle --format=iife --target=es2020 --alias:path=./src/shims/path.js --alias:string_decoder=./src/shims/string_decoder.js --outfile=js/localsend.js"
 	},
 	"dependencies": {
 		"@nextcloud/axios": "^2.5.2",

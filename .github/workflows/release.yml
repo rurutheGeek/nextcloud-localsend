@@ -8,7 +8,7 @@ name: Release
 # (Settings -> Environments -> appstore) and every store release waits for an
 # approval before anything is uploaded. Pre-releases are published as nightly.
 #
-# Repository secrets: APP_PRIVATE_KEY, APP_PUBLIC_CRT, APPSTORE_TOKEN
+# Secrets of the `appstore` environment: APP_PRIVATE_KEY, APPSTORE_TOKEN
 # Repository variable: APPSTORE_ENABLED=true (after the app is registered)
 #
 # The certificate is obtained once via a pull request to
@@ -60,6 +60,8 @@ jobs:
           mkdir -p build/artifacts
           tar \
             --exclude='./node_modules' \
+            --exclude='./build' \
+            --exclude='./tools' \
             --exclude='./server' \
             --exclude='./.github' \
             --exclude='./krankerl.toml' \
@@ -68,7 +70,10 @@ jobs:
             --exclude='./.git' \
             --transform "s,^\.,${APP_ID}," \
             -czf "build/artifacts/${APP_ID}.tar.gz" .
-          tar tzf "build/artifacts/${APP_ID}.tar.gz" | head -1
+          if tar tzf "build/artifacts/${APP_ID}.tar.gz" | grep -E "^${APP_ID}/(build|tools|server|node_modules)/"; then
+            echo "::error::the archive contains files that do not belong to the app"
+            exit 1
+          fi
 
       - name: Attach the archive to the GitHub release
         if: github.event_name == 'release'

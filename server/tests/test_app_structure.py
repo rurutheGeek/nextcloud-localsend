@@ -1,5 +1,6 @@
 """Guard the localsend_share Nextcloud app without a Nextcloud installation."""
 import json
+import re
 from pathlib import Path
 import unittest
 import xml.etree.ElementTree as ET
@@ -112,6 +113,16 @@ class TranslationTests(unittest.TestCase):
                     'Relay URL', 'Relay token', 'Save'):
             self.assertIn(key, translations)
             self.assertTrue(translations[key])
+
+    def test_the_files_action_translations_ship_as_javascript(self):
+        # addInitScript() loads l10n/<lang>.js; the .json file only serves PHP.
+        source = read('l10n/ja.js')
+        match = re.fullmatch(
+            r'OC\.L10N\.register\(\s*"localsend_share",\s*(\{.*\}),\s*"[^"]*"\s*\);\s*',
+            source, re.S)
+        self.assertIsNotNone(match)
+        self.assertEqual(json.loads(match.group(1)),
+                         json.loads(read('l10n/ja.json'))['translations'])
 
 
 if __name__ == '__main__':

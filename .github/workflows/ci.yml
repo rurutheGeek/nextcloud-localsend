@@ -20,8 +20,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      - name: The committed bundle must match the source
-        run: git diff --exit-code js/
+      - name: The committed bundle and translations must match the source
+        run: git diff --exit-code js/ l10n/
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'

@@ -48,7 +48,7 @@ Filesアプリのファイルメニューに **LocalSendで送る** を追加し
 プライバシー: 利用者がアクションを実行すると、選んだファイルが中継APIへ送られ、
 そこから利用者が選んだ端末へ送られます。それ以外のデータは送信しません。
 ]]></description>
-	<version>1.0.2</version>
+	<version>1.0.3</version>
 	<licence>AGPL-3.0-or-later</licence>
 	<author>rurutheGeek</author>
 	<!-- PHPクラスの名前空間。宣言が無いと Nextcloud は ucfirst した

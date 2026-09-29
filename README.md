@@ -167,8 +167,10 @@ The store requires an app-specific certificate and a signed archive.
    [nextcloud/app-certificate-requests](https://github.com/nextcloud/app-certificate-requests)
    and put the signed `localsend_share.crt` next to the key.
 
-3. Add the repository secrets `APP_PRIVATE_KEY`, `APP_PUBLIC_CRT` and
-   `APPSTORE_TOKEN` (from <https://apps.nextcloud.com/account/token>).
+3. Add the secrets `APP_PRIVATE_KEY` and `APPSTORE_TOKEN` (from
+   <https://apps.nextcloud.com/account/token>) to the `appstore` environment
+   (Settings → Environments → `appstore`), so only the approved publish job can
+   read them.
 
 4. Register the app at <https://apps.nextcloud.com/developer/apps/new> with
    the certificate and the signature over the app id, then set the repository
