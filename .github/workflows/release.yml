@@ -24,8 +24,6 @@ permissions:
 
 env:
   APP_ID: localsend_share
-  KRANKERL_VERSION: '0.14.0'
-  KRANKERL_SHA256: f4a24300458cdc9d73811ccc1d7ec19aef78788c2bb21d8ecfd51913e42a4d99
 
 jobs:
   package:
@@ -104,25 +102,34 @@ jobs:
           name: localsend_share.tar.gz
           path: build/artifacts
 
-      - name: Install krankerl
-        run: |
-          curl -fsSL -o krankerl \
-            "https://github.com/ChristophWurst/krankerl/releases/download/v${KRANKERL_VERSION}/krankerl"
-          echo "${KRANKERL_SHA256}  krankerl" | sha256sum -c -
-          chmod +x krankerl
-          sudo mv krankerl /usr/local/bin/krankerl
-
+      # The store API is called directly: krankerl 0.14's HTTP client fails
+      # against the store with "invalid HTTP version parsed".
       - name: Publish to the Nextcloud App Store
         env:
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
           APPSTORE_TOKEN: ${{ secrets.APPSTORE_TOKEN }}
+          DOWNLOAD_URL: https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/${{ env.APP_ID }}.tar.gz
+          NIGHTLY: ${{ github.event.release.prerelease }}
         run: |
-          mkdir -p ~/.nextcloud/certificates
-          printf '%s' "$APP_PRIVATE_KEY" > ~/.nextcloud/certificates/$APP_ID.key
-          nightly=""
-          if [ "${{ github.event.release.prerelease }}" = "true" ]; then
-            nightly="--nightly"
+          archive="build/artifacts/${APP_ID}.tar.gz"
+          key="$RUNNER_TEMP/${APP_ID}.key"
+          printf '%s\n' "$APP_PRIVATE_KEY" > "$key"
+          signature="$(openssl dgst -sha512 -sign "$key" "$archive" | base64 -w0)"
+          rm -f "$key"
+          # The store downloads the release asset and checks this signature
+          # against it, so the asset must be the archive signed here.
+          curl -fsSL -o published.tar.gz "$DOWNLOAD_URL"
+          cmp published.tar.gz "$archive"
+          jq -n --arg download "$DOWNLOAD_URL" --arg signature "$signature" \
+            --argjson nightly "$NIGHTLY" \
+            '{download: $download, signature: $signature, nightly: $nightly}' > release.json
+          status="$(curl -sS -o response.txt -w '%{http_code}' -X POST \
+            -H "Authorization: Token ${APPSTORE_TOKEN}" \
+            -H 'Content-Type: application/json' \
+            --data @release.json https://apps.nextcloud.com/api/v1/apps/releases)"
+          head -c 2000 response.txt; echo
+          # 201: new release, 200: an existing release was updated.
+          if [ "$status" != 201 ] && [ "$status" != 200 ]; then
+            echo "::error::App Store answered HTTP $status"
+            exit 1
           fi
-          krankerl login --appstore "$APPSTORE_TOKEN"
-          krankerl publish $nightly \
-            "https://github.com/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/${APP_ID}.tar.gz"
