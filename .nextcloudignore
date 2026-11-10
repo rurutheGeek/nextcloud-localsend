@@ -9,3 +9,4 @@
 /.nextcloudignore
 /.editorconfig
 /tools
+/tests

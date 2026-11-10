@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Optional receiving: the relay can act as a LocalSend receiver and store
+  incoming files in a Nextcloud user's folder. It is off by default and is
+  turned on by an administrator (for 15 minutes, 1 hour, 1 day or until turned
+  off) under *Administration settings → LocalSend Share*.
+- Every transfer needs the PIN: `prepare-upload` without the right `?pin=`
+  answers 401, so LocalSend apps ask the sender for it. Receiving cannot be
+  turned on without a PIN, and repeated wrong PINs lock the address out for
+  five minutes.
+- Settings for the target user and folder, the maximum file size, the number of
+  transfers at the same time, and a log of received files.
+- Relay settings `LOCALSEND_RECEIVE_NEXTCLOUD_URL`, `LOCALSEND_RECEIVE_PORT`
+  and `LOCALSEND_RECEIVE_INSECURE`. Without the URL the relay behaves as before.
+
 ## [1.0.3] - 2026-09-30
 
 ### Fixed

@@ -20,13 +20,19 @@ app's repository; a `compose.yaml` is included so it can be started with
 Docker. The relay must run on the same LAN as the receiving devices (UDP
 multicast and broadcast discovery) and therefore usually uses host networking.
 
+Optionally, the relay can also receive files from LocalSend devices and store
+them in a folder of a user chosen by the administrator. Receiving is off by
+default, always requires a PIN, and can be turned on for a limited time or
+until it is turned off.
+
 Requirements:
 - Nextcloud 33 or newer
 - A LocalSend relay reachable from the Nextcloud server (see `server/`)
 
 Privacy: when a user triggers the action, the selected file is sent to the
 relay and from there to the device the user picked. No other data is
-transmitted.
+transmitted. When receiving is on, files sent to the relay with the right PIN
+are stored in the configured user's folder.
 ]]></description>
 	<description lang="ja"><![CDATA[
 Filesアプリのファイルメニューに **LocalSendで送る** を追加します。
@@ -40,6 +46,10 @@ Filesアプリのファイルメニューに **LocalSendで送る** を追加し
 リポジトリの `server/` に `compose.yaml` 付きで入っています。中継APIは
 送り先と同じLANで動かす必要があり（UDPのマルチキャスト・ブロードキャスト探索）、
 通常はhostネットワークを使います。
+
+任意で、中継APIをLocalSend端末からの受信にも使えます。受け取ったファイルは
+管理者が決めた利用者のフォルダに置かれます。受信は既定で切ってあり、必ずPINが
+必要で、期間を区切って、または切るまでずっと有効にできます。
 
 必要なもの:
 - Nextcloud 33 以降

@@ -16,6 +16,13 @@ The Nextcloud app calls this API:
 
 Anything else that can speak HTTP can use /devices and /send as well.
 
+Optional receiving (LOCALSEND_RECEIVE_NEXTCLOUD_URL set): the relay also
+answers the LocalSend receiver endpoints (info, prepare-upload, upload,
+cancel) on its port and on LOCALSEND_RECEIVE_PORT. The Nextcloud app decides
+whether receiving is on, the PIN and the limits; accepted files are streamed
+to Nextcloud and nothing is kept on the relay. prepare-upload without the
+right PIN answers 401, so LocalSend apps ask the sender for it.
+
 Environment:
   LOCALSEND_SEND_TOKEN        shared secret (required)
   LOCALSEND_SEND_FINGERPRINT  stable device fingerprint (required; generate once
@@ -29,6 +36,12 @@ Environment:
                               the protocol's fallback when multicast is not
                               possible). Default: the local /24. Set to "none"
                               to only use multicast.
+  LOCALSEND_RECEIVE_NEXTCLOUD_URL  base URL of the Nextcloud with the app
+                              (e.g. https://cloud.example.net); turns the
+                              receiver on. Uses LOCALSEND_SEND_TOKEN.
+  LOCALSEND_RECEIVE_PORT      extra listen port for LocalSend's HTTP scan,
+                              default 53317; "none" to disable
+  LOCALSEND_RECEIVE_INSECURE  "1" to skip TLS verification towards Nextcloud
 
 Multicast discovery needs the devices to reach our HTTP port, which firewalls
 often block. The scan probes every address in LOCALSEND_SEND_SCAN outbound, so
@@ -40,6 +53,7 @@ import ipaddress
 import json
 import mimetypes
 import os
+import secrets
 import socket
 import ssl
 import threading
@@ -47,7 +61,7 @@ import time
 from datetime import datetime, timezone
 from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 MULTICAST = ('224.0.0.167', 53317)
 BROADCAST = ('255.255.255.255', 53317)
@@ -351,6 +365,255 @@ def read_body(handler, length):
     return handler.rfile.read(length) if length > 0 else b''
 
 
+# --- Receiving (optional) -------------------------------------------------
+#
+# With LOCALSEND_RECEIVE_NEXTCLOUD_URL set, the relay also acts as a LocalSend
+# receiver. Whether it accepts anything, the PIN and the limits are decided by
+# the Nextcloud app (GET <nextcloud>/receive/config); accepted files are
+# streamed to Nextcloud (POST <nextcloud>/receive/file), which stores them in
+# the user and folder the administrator chose. Nothing is kept on the relay.
+
+RECEIVE_ROUTE = '/index.php/apps/localsend_share/receive'
+CONFIG_CACHE_SECONDS = 10
+SESSION_IDLE_SECONDS = 30 * 60
+PIN_ATTEMPTS = 5
+PIN_WINDOW_SECONDS = 5 * 60
+DISABLED_CONFIG = {'enabled': False}
+
+
+class NextcloudLink:
+    """Talks to the localsend_share app: receive settings and file delivery."""
+
+    def __init__(self, base_url, token, insecure=False, timeout=30):
+        self.base_url = base_url.rstrip('/')
+        self.token = token
+        self.insecure = insecure
+        self.timeout = timeout
+        self.lock = threading.Lock()
+        self.cached = None
+        self.cached_at = 0.0
+
+    def _connection(self, timeout):
+        parts = urlsplit(self.base_url)
+        host = parts.hostname
+        if parts.scheme == 'https':
+            context = (ssl._create_unverified_context() if self.insecure
+                       else ssl.create_default_context())
+            return HTTPSConnection(host, parts.port or 443, context=context,
+                                   timeout=timeout), parts.path
+        return HTTPConnection(host, parts.port or 80, timeout=timeout), parts.path
+
+    def config(self):
+        """The receive settings, cached briefly. Any failure means 'disabled'."""
+        with self.lock:
+            if self.cached is not None and time.monotonic() - self.cached_at < CONFIG_CACHE_SECONDS:
+                return self.cached
+        try:
+            client, prefix = self._connection(10)
+            try:
+                client.request('GET', prefix + RECEIVE_ROUTE + '/config',
+                               headers={'Authorization': 'Bearer ' + self.token,
+                                        'Accept': 'application/json'})
+                response = client.getresponse()
+                payload = response.read()
+            finally:
+                client.close()
+            config = json.loads(payload) if response.status == 200 else DISABLED_CONFIG
+            if not isinstance(config, dict):
+                config = DISABLED_CONFIG
+        except Exception as error:  # noqa: BLE001 - unreachable Nextcloud = closed
+            print(f'receive: could not load the settings: {error}', flush=True)
+            config = DISABLED_CONFIG
+        with self.lock:
+            self.cached, self.cached_at = config, time.monotonic()
+        return config
+
+    def deliver(self, filename, sender, size, stream):
+        """Stream one file to Nextcloud. Returns (status, payload)."""
+        client, prefix = self._connection(max(self.timeout, 300))
+        try:
+            client.request('PUT', prefix + RECEIVE_ROUTE + '/file', body=stream,
+                           headers={'Authorization': 'Bearer ' + self.token,
+                                    'Content-Type': 'application/octet-stream',
+                                    'Content-Length': str(size),
+                                    'X-Receive-Filename': quote(filename, safe=''),
+                                    'X-Receive-Sender': quote(sender, safe='')},
+                           encode_chunked=False)
+            response = client.getresponse()
+            payload = response.read()
+        finally:
+            client.close()
+        try:
+            return response.status, json.loads(payload)
+        except ValueError:
+            return response.status, {}
+
+
+class LimitedReader:
+    """Read at most `remaining` bytes from a stream (the request body)."""
+
+    def __init__(self, stream, remaining):
+        self.stream = stream
+        self.remaining = remaining
+
+    def read(self, size=-1):
+        if self.remaining <= 0:
+            return b''
+        if size is None or size < 0 or size > self.remaining:
+            size = self.remaining
+        chunk = self.stream.read(min(size, 1024 * 1024))
+        self.remaining -= len(chunk)
+        return chunk
+
+
+class ReceiveSessions:
+    """prepare-upload sessions, the PIN check and the concurrency limit."""
+
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.sessions = {}
+        self.failures = {}
+
+    def _expire(self, now):
+        for session_id in [key for key, session in self.sessions.items()
+                           if now - session['touched'] > SESSION_IDLE_SECONDS]:
+            del self.sessions[session_id]
+
+    def _locked_out(self, ip, now):
+        recent = [at for at in self.failures.get(ip, []) if now - at < PIN_WINDOW_SECONDS]
+        self.failures[ip] = recent
+        return len(recent) >= PIN_ATTEMPTS
+
+    def prepare(self, config, request, pin, ip):
+        """Validate a prepare-upload request. Returns (status, payload)."""
+        if not config.get('enabled'):
+            return 403, {'message': 'Receiving is turned off'}
+        expected = str(config.get('pin') or '')
+        if not expected:
+            return 403, {'message': 'Receiving is turned off'}
+        now = self.clock()
+        with self.lock:
+            self._expire(now)
+            if self._locked_out(ip, now):
+                return 429, {'message': 'Too many wrong PINs, try again later'}
+            if not hmac.compare_digest((pin or '').encode(), expected.encode()):
+                # The official app asks for the PIN on 401 and retries with ?pin=.
+                if pin:
+                    self.failures.setdefault(ip, []).append(now)
+                return 401, {'message': 'PIN required'}
+            self.failures.pop(ip, None)
+            files = request.get('files') if isinstance(request, dict) else None
+            if not isinstance(files, dict) or not files:
+                return 400, {'message': 'No files'}
+            limit = int(config.get('maxBytes') or 0)
+            accepted = {}
+            for file_id, entry in files.items():
+                if not isinstance(entry, dict):
+                    return 400, {'message': 'Invalid file entry'}
+                try:
+                    size = int(entry.get('size') or 0)
+                except (TypeError, ValueError):
+                    return 400, {'message': 'Invalid file size'}
+                if size < 0 or (limit and size > limit):
+                    return 413, {'message': 'File too large'}
+                accepted[str(file_id)] = {
+                    'name': str(entry.get('fileName') or file_id),
+                    'size': size,
+                    'token': secrets.token_urlsafe(16),
+                }
+            if len(self.sessions) >= max(1, int(config.get('maxConcurrent') or 1)):
+                return 409, {'message': 'Blocked by another session'}
+            info = request.get('info') if isinstance(request.get('info'), dict) else {}
+            session_id = secrets.token_urlsafe(16)
+            self.sessions[session_id] = {
+                'ip': ip, 'files': accepted, 'touched': now,
+                'sender': str(info.get('alias') or ip),
+            }
+            return 200, {'sessionId': session_id,
+                         'files': {key: value['token'] for key, value in accepted.items()}}
+
+    def claim(self, session_id, file_id, token, ip):
+        """Check an upload request. Returns (status, entry-or-message)."""
+        with self.lock:
+            self._expire(self.clock())
+            session = self.sessions.get(session_id or '')
+            if session is None:
+                return 403, {'message': 'Unknown session'}
+            if session['ip'] != ip:
+                return 403, {'message': 'Wrong address'}
+            entry = session['files'].get(file_id or '')
+            if entry is None or not hmac.compare_digest(
+                    (token or '').encode(), entry['token'].encode()):
+                return 403, {'message': 'Invalid token'}
+            if entry.get('busy'):
+                return 409, {'message': 'Upload already running'}
+            entry['busy'] = True
+            session['touched'] = self.clock()
+            return 200, dict(entry, sender=session['sender'])
+
+    def release(self, session_id, file_id, done):
+        """End an upload; a finished file leaves the session for good."""
+        with self.lock:
+            session = self.sessions.get(session_id)
+            if session is None:
+                return
+            entry = session['files'].get(file_id)
+            if entry is not None:
+                if done:
+                    del session['files'][file_id]
+                else:
+                    entry['busy'] = False
+            session['touched'] = self.clock()
+            if not session['files']:
+                del self.sessions[session_id]
+
+    def cancel(self, session_id, ip):
+        with self.lock:
+            session = self.sessions.get(session_id or '')
+            if session is not None and session['ip'] == ip:
+                del self.sessions[session_id]
+                return True
+            return False
+
+
+def answer_announcements(server, sock):
+    """Reply to LocalSend multicast announcements while receiving is on."""
+    while True:
+        try:
+            payload, address = sock.recvfrom(65535)
+        except OSError:
+            return
+        try:
+            info = json.loads(payload)
+        except ValueError:
+            continue
+        if (not isinstance(info, dict) or not info.get('announce')
+                or device_is_self(info, server.fingerprint)):
+            continue
+        server.book.remember(info, address[0])
+        if not server.nextcloud.config().get('enabled'):
+            continue
+        reply = json.loads(announce_message(server.fingerprint, server.alias,
+                                            server.port, server.model))
+        reply['announce'] = False
+        try:
+            sock.sendto(json.dumps(reply).encode(), MULTICAST)
+        except OSError:
+            pass
+
+
+def multicast_listener():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if hasattr(socket, 'SO_REUSEPORT'):
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    sock.bind(('', MULTICAST[1]))
+    membership = socket.inet_aton(MULTICAST[0]) + socket.inet_aton('0.0.0.0')
+    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, membership)
+    return sock
+
+
 class SendHandler(BaseHTTPRequestHandler):
     server_version = 'localsend-relay/1.0'
     timeout = 120
@@ -381,9 +644,19 @@ class SendHandler(BaseHTTPRequestHandler):
                                self.server.scan)
             self._respond(200, {'devices': [public_device(d) for d in devices]})
             return
+        if self.path.startswith('/api/localsend/v2/info'):
+            self._respond(200, registration_body(self.server.alias, self.server.fingerprint,
+                                                 self.server.port, self.server.model))
+            return
         self._respond(404, {'error': 'not found'})
 
     def do_POST(self):
+        route = urlsplit(self.path)
+        query = {key: values[0] for key, values in parse_qs(route.query).items()}
+        if route.path in ('/api/localsend/v2/prepare-upload',
+                          '/api/localsend/v2/upload', '/api/localsend/v2/cancel'):
+            self._handle_receive(route.path.rsplit('/', 1)[1], query)
+            return
         if self.path.startswith('/api/localsend/v2/register'):
             try:
                 info = json.loads(read_body(self, self._content_length()) or b'{}')
@@ -448,6 +721,60 @@ class SendHandler(BaseHTTPRequestHandler):
             return
         self._respond(200, result)
 
+    def _handle_receive(self, action, query):
+        sessions = getattr(self.server, 'sessions', None)
+        nextcloud = getattr(self.server, 'nextcloud', None)
+        ip = self.client_address[0]
+        if sessions is None or nextcloud is None:
+            self.close_connection = True
+            self._respond(403, {'message': 'Receiving is not set up on this relay'})
+            return
+        if action == 'cancel':
+            sessions.cancel(query.get('sessionId'), ip)
+            self._respond(200, {})
+            return
+        if action == 'prepare-upload':
+            length = self._content_length()
+            if length > 1024 * 1024:
+                self.close_connection = True
+                self._respond(413, {'message': 'Request too large'})
+                return
+            try:
+                request = json.loads(read_body(self, length) or b'{}')
+            except ValueError:
+                self._respond(400, {'message': 'Invalid JSON'})
+                return
+            status, payload = sessions.prepare(nextcloud.config(), request,
+                                               query.get('pin'), ip)
+            self._respond(status, payload)
+            return
+        session_id, file_id = query.get('sessionId'), query.get('fileId')
+        status, entry = sessions.claim(session_id, file_id, query.get('token'), ip)
+        if status != 200:
+            self.close_connection = True
+            self._respond(status, entry)
+            return
+        done = False
+        try:
+            length = self._content_length()
+            if 'Content-Length' not in self.headers or length != entry['size']:
+                self.close_connection = True
+                self._respond(400, {'message': 'Content-Length must match the announced size'})
+                return
+            status, payload = nextcloud.deliver(entry['name'], entry['sender'], length,
+                                                LimitedReader(self.rfile, length))
+            if status != 200:
+                self.close_connection = True
+                self._respond(500, {'message': payload.get('error') or 'Could not store the file'})
+                return
+            done = True
+            self._respond(200, {})
+        except Exception as error:  # noqa: BLE001 - report delivery failures
+            self.close_connection = True
+            self._respond(500, {'message': f'Could not store the file: {error}'})
+        finally:
+            sessions.release(session_id, file_id, done)
+
     def log_message(self, fmt, *args):
         print(f'{self.address_string()} {fmt % args}', flush=True)
 
@@ -472,6 +799,30 @@ def main():
     server.max_bytes = int(os.environ.get('LOCALSEND_SEND_MAX_BYTES',
                                           str(2 * 1024 * 1024 * 1024)))
     server.book = DeviceBook()
+    servers = [server]
+    nextcloud_url = os.environ.get('LOCALSEND_RECEIVE_NEXTCLOUD_URL', '').strip()
+    if nextcloud_url:
+        server.nextcloud = NextcloudLink(
+            nextcloud_url, server.token,
+            insecure=os.environ.get('LOCALSEND_RECEIVE_INSECURE', '') in ('1', 'true', 'yes'))
+        server.sessions = ReceiveSessions()
+        # LocalSend apps scan port 53317 over HTTP; listen there as well.
+        extra = os.environ.get('LOCALSEND_RECEIVE_PORT', str(DEVICE_PORT)).strip()
+        if extra.lower() not in ('', 'none', 'off', '0') and int(extra) != server.port:
+            second = ThreadingHTTPServer(('0.0.0.0', int(extra)), SendHandler)
+            for name in ('token', 'fingerprint', 'port', 'alias', 'model',
+                         'discovery_timeout', 'scan', 'max_bytes', 'book',
+                         'nextcloud', 'sessions'):
+                setattr(second, name, getattr(server, name))
+            servers.append(second)
+        try:
+            listener = multicast_listener()
+            threading.Thread(target=answer_announcements, args=(server, listener),
+                             daemon=True).start()
+        except OSError as error:
+            print(f'receive: multicast listener unavailable: {error}', flush=True)
+    for extra_server in servers[1:]:
+        threading.Thread(target=extra_server.serve_forever, daemon=True).start()
     server.serve_forever()
 
 
