@@ -80,6 +80,46 @@ As an administrator open *Administration settings → LocalSend Share* and set:
 Saving runs a health check against the relay and reports the result on the
 same page. No `occ config:app:set` needed.
 
+## Receiving files (optional)
+
+The relay can also act as a LocalSend receiver, so phones and computers on the
+LAN can send files into Nextcloud. It is **off by default**.
+
+```
+LocalSend app ──prepare-upload (?pin=…)──▶ relay ──PUT /receive/file──▶ Nextcloud user's folder
+                                              ▲
+                                 GET /receive/config (on/off, PIN, limits)
+```
+
+1. Set `LOCALSEND_RECEIVE_NEXTCLOUD_URL` in the relay's `.env` to the base URL
+   of your Nextcloud (e.g. `https://cloud.example.net`) and restart the relay.
+   The relay token is reused for these calls. It now also listens on port
+   `53317` (`LOCALSEND_RECEIVE_PORT`), where LocalSend apps look for receivers,
+   and answers their multicast announcements while receiving is on.
+2. In *Administration settings → LocalSend Share → Receiving*, set a **PIN**
+   (at least 4 characters), the **user** and **folder** the files go to, the
+   maximum file size and the number of transfers at the same time, then choose
+   how long to accept files: 15 minutes, 1 hour, 1 day or until turned off.
+
+How it behaves:
+
+- Every transfer needs the PIN. Without it, or with a wrong one,
+  `prepare-upload` answers `401`; the LocalSend app then asks the sender for
+  the PIN and retries. After 5 wrong PINs an address is locked out for 5
+  minutes (`429`). Receiving cannot be turned on without a PIN.
+- Files over the size limit are refused (`413`); while the configured number of
+  transfers is running, further senders get `409`.
+- Files are streamed to Nextcloud and not kept on the relay. Folder paths sent
+  by the device are flattened into one file name, and an existing name gets a
+  numbered copy instead of being overwritten.
+- If Nextcloud is unreachable or receiving is off, the relay refuses transfers.
+- With *Keep a log of received files* on, the last 50 transfers (time, sender,
+  path, size) are listed on the settings page; every transfer is also written
+  to the Nextcloud log.
+
+The relay's LocalSend endpoints are plain HTTP, like the rest of the relay;
+LocalSend apps handle receivers that advertise `"protocol": "http"`.
+
 ## Relay configuration
 
 | Variable | Required | Default | Meaning |
@@ -91,6 +131,9 @@ same page. No `occ config:app:set` needed.
 | `LOCALSEND_SEND_TIMEOUT` | no | `3` | discovery wait in seconds |
 | `LOCALSEND_SEND_SCAN` | no | local /24 | CIDR probed outbound for devices; `none` disables the scan |
 | `LOCALSEND_SEND_MAX_BYTES` | no | `2147483648` | maximum file size (2 GiB) |
+| `LOCALSEND_RECEIVE_NEXTCLOUD_URL` | no | – | Nextcloud base URL; turns the receiver on (see above) |
+| `LOCALSEND_RECEIVE_PORT` | no | `53317` | extra port for LocalSend's receiver scan; `none` disables it |
+| `LOCALSEND_RECEIVE_INSECURE` | no | `0` | `1` skips TLS verification towards Nextcloud (self-signed certificates) |
 
 ### API
 
@@ -105,6 +148,10 @@ same page. No `occ config:app:set` needed.
     device that declines the transfer answers `{"status": "skipped"}`
 - `POST /api/localsend/v2/register` — discovery replies from LocalSend devices
   (no token; only used to remember devices)
+- `GET /api/localsend/v2/info`, `POST /api/localsend/v2/prepare-upload`,
+  `POST /api/localsend/v2/upload`, `POST /api/localsend/v2/cancel` — the
+  LocalSend receiver (only with `LOCALSEND_RECEIVE_NEXTCLOUD_URL`; otherwise
+  `403`)
 
 ### Troubleshooting
 
@@ -133,11 +180,18 @@ same page. No `occ config:app:set` needed.
   itself as another device; peers are identified by fingerprint and the
   receiving device still shows a confirmation before accepting a file.
 
+- Receiving is protected by the PIN, not by the relay token: anyone on the LAN
+  who knows the PIN can store files in the configured folder while receiving is
+  on. Use a PIN that is not easy to guess, and prefer a limited time window.
+- The `/receive/*` routes of the app accept only the relay token and are
+  covered by Nextcloud's brute-force protection.
+
 ## Development
 
 ```bash
 npm ci && npm run build        # rebuild js/localsend.js with esbuild
 python3 -m unittest discover -s server/tests -v
+php tests/php/ReceivePolicyTest.php
 docker build -t localsend-relay:dev server/
 ```
 
@@ -206,6 +260,11 @@ Nextcloud の Files アプリに「LocalSendで送る」アクションを追加
   設定します。保存時にヘルスチェックして結果を表示します
 - 利用者はFilesの「LocalSendで送る」からLAN上の端末を選んで送信します。送り先の
   端末ではLocalSendアプリを開いて受信を確認してください
+- 任意で受信もできます。中継APIの `.env` に `LOCALSEND_RECEIVE_NEXTCLOUD_URL`
+  （NextcloudのURL）を書き、管理画面の「受信」でPIN・置き場所の利用者とフォルダ・
+  サイズの上限・同時に受ける数・受信の記録を設定して、期間（15分・1時間・1日・
+  切るまでずっと）を選びます。既定では切ってあり、PINが無いと有効にできません。
+  PINが無いか違う送信は401で断り、LocalSendアプリはPINを尋ねて送り直します
 - App Store 公開にはアプリ専用の証明書（CSRを
   [app-certificate-requests](https://github.com/nextcloud/app-certificate-requests)
   へPR）と、GitHub Release からの署名・アップロードが必要です

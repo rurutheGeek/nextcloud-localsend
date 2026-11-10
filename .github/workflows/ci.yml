@@ -27,7 +27,9 @@ jobs:
           php-version: '8.3'
       - name: PHP syntax check
         run: |
-          find appinfo lib templates -name '*.php' -print0 | xargs -0 -n1 php -l
+          find appinfo lib templates tests -name '*.php' -print0 | xargs -0 -n1 php -l
+      - name: PHP receive rule tests
+        run: php tests/php/ReceivePolicyTest.php
       - name: XML schema sanity (well-formed)
         run: python3 -c "import xml.etree.ElementTree as ET; ET.parse('appinfo/info.xml')"
 
